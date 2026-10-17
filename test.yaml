@@ -3,6 +3,8 @@
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Print all extra variables passed from Semaphore
+    - name: Print user selection
       ansible.builtin.debug:
-        var: vars
+        msg:
+          - "Deployment selected: {{ deployment_type_selection | default('No selection made') }}"
+          - "Full Extra Vars: {{ extra_vars | default(vars) }}"
