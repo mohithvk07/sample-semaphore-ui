@@ -1,0 +1,8 @@
+---
+- name: Debug Survey Variables
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Print all extra variables passed from Semaphore
+      ansible.builtin.debug:
+        var: vars
