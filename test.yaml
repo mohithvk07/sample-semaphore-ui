@@ -1,10 +1,19 @@
 ---
-- name: Debug Survey Variables
+- name: Debug All Survey Variables (Tasks 1 & 2)
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Print user selection
+    - name: Print Task 1 Infrastructure Selections
       ansible.builtin.debug:
         msg:
-          - "Deployment selected: {{ deployment_type_selection | default('No selection made') }}"
-          - "Full Extra Vars: {{ extra_vars | default(vars) }}"
+          - "Deployment Type: {{ deployment_type_selection | default('Not Selected') }}"
+          - "Configuration: {{ configuration | default('Not Selected') }}"
+          - "Memory: {{ memory_selection | default('Not Selected') }}"
+
+    - name: Print Task 2 Network & Security Selections
+      ansible.builtin.debug:
+        msg:
+          - "Network Type: {{ network_type | default('Not Selected') }}"
+          - "VPC ID: {{ vpc_id | default('Not Selected') }}"
+          - "Security Group Name: {{ security_group_name | default('Not Selected') }}"
+          - "Allowed Port: {{ allowed_port | default('Not Selected') }}"
