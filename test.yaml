@@ -48,7 +48,7 @@
 
     - name: Create local workspace directory for application files
       file:
-        path: /opt/relfast/workspace
+        path: "{{ ansible_env.HOME }}/relfast/workspace"
         state: directory
         mode: '0755'
 
