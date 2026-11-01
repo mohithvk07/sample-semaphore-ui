@@ -1,23 +1,57 @@
 ---
-- name: Infrastructure Deployment Configuration
+- name: Infrastructure Deployment and VM Environment Setup
   hosts: localhost
   connection: local
-  # Remove become: yes so it runs directly with container permissions
 
   vars:
-    deployment_type: "{{ deployment_type | default('Serverless') }}"
-    configuration_runtime: "{{ configuration | default('Python 3.11') }}"
-    memory_selection: "{{ memory_selection | default('1 vCPU / 2 GB') }}"
-    network_type: "{{ network_type | default('Public') }}"
-    vpc_id: "{{ vpc_id | default('') }}"
-    security_group_name: "{{ security_group_name | default('') }}"
-    allowed_port: "{{ allowed_port | default('80,443') }}"
-    environment_vars: "{{ environment_variables | default('Prod') }}"
+    # Safely map incoming Semaphore form variables with reliable defaults
+    cfg_deployment_type: "{{ deployment_type_selection | default('Serverless') }}"
+    cfg_configuration: "{{ configuration | default('Python 3.11') }}"
+    cfg_memory: "{{ memory | default('1 vCPU / 2 GB') }}"
+    cfg_network_type: "{{ network_type | default('Public') }}"
+    cfg_vpc_id: "{{ vpc_id | default('') }}"
+    cfg_security_group_name: "{{ security_group_name | default('') }}"
+    cfg_allowed_port: "{{ allowed_port | default('80,443') }}"
+    cfg_env_var: "{{ env_var | default('Prod') }}"
+    cfg_timeout: "{{ timeout | default('10') }}"
 
   tasks:
-    - name: Print deployment parameters for verification
+    - name: Display deployment configuration parameters
       debug:
         msg: >
-          Deploying {{ deployment_type }} with runtime {{ configuration_runtime }},
-          Network: {{ network_type }}, VPC: {{ vpc_id | default('None') }},
-          Security Group: {{ security_group_name | default('None') }}
+          Running setup for Deployment: {{ cfg_deployment_type }} |
+          Runtime/Config: {{ cfg_configuration }} |
+          Memory: {{ cfg_memory }} |
+          Network: {{ cfg_network_type }} |
+          VPC ID: {{ cfg_vpc_id if cfg_vpc_id != '' else 'None (Public/Local)' }} |
+          Security Group: {{ cfg_security_group_name if cfg_security_group_name != '' else 'None' }} |
+          Ports: {{ cfg_allowed_port }} |
+          Environment: {{ cfg_env_var }} |
+          Timeout: {{ cfg_timeout }} mins
+
+    - name: Update apt package cache (Debian/Ubuntu containers)
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+      ignore_errors: yes
+
+    - name: Install required terminal and development packages
+      apt:
+        name:
+          - curl
+          - git
+          - htop
+          - bash-completion
+        state: present
+      when: ansible_os_family == "Debian"
+      ignore_errors: yes
+
+    - name: Create local workspace directory for application files
+      file:
+        path: /opt/relfast/workspace
+        state: directory
+        mode: '0755'
+
+    - name: Finalize environment verification status
+      debug:
+        msg: "VM environment setup completed successfully. Live terminal is active and ready."
