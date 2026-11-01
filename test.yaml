@@ -1,27 +1,23 @@
 ---
-- name: Configure Local VM and Terminal Environment
+- name: Infrastructure Deployment Configuration
   hosts: localhost
   connection: local
-  become: yes
+  # Remove become: yes so it runs directly with container permissions
+
+  vars:
+    deployment_type: "{{ deployment_type | default('Serverless') }}"
+    configuration_runtime: "{{ configuration | default('Python 3.11') }}"
+    memory_selection: "{{ memory_selection | default('1 vCPU / 2 GB') }}"
+    network_type: "{{ network_type | default('Public') }}"
+    vpc_id: "{{ vpc_id | default('') }}"
+    security_group_name: "{{ security_group_name | default('') }}"
+    allowed_port: "{{ allowed_port | default('80,443') }}"
+    environment_vars: "{{ environment_variables | default('Prod') }}"
 
   tasks:
-    - name: Update apt package cache
-      apt:
-        update_cache: yes
-      when: ansible_os_family == "Debian"
-
-    - name: Install essential terminal and system utilities
-      apt:
-        name:
-          - curl
-          - git
-          - bash-completion
-          - htop
-        state: present
-      when: ansible_os_family == "Debian"
-
-    - name: Ensure target working directories exist
-      file:
-        path: /opt/relfast/workspace
-        state: directory
-        mode: '0755'
+    - name: Print deployment parameters for verification
+      debug:
+        msg: >
+          Deploying {{ deployment_type }} with runtime {{ configuration_runtime }},
+          Network: {{ network_type }}, VPC: {{ vpc_id | default('None') }},
+          Security Group: {{ security_group_name | default('None') }}
