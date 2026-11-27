@@ -3,7 +3,7 @@
   hosts: localhost
   connection: local
   gather_facts: true
-  become: true
+  become: "{{ (ansible_user_id | default('root')) != 'root' }}"
 
   vars:
     # Incoming Semaphore form variables with safe defaults
