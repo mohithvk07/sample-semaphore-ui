@@ -1,10 +1,12 @@
 ---
-- name: Infrastructure Deployment and VM Environment Setup
+- name: KVM VM Setup via WSL and Semaphore Variables
   hosts: localhost
   connection: local
+  gather_facts: true
+  become: true
 
   vars:
-    # Safely map incoming Semaphore form variables with reliable defaults
+    # Incoming Semaphore form variables with safe defaults
     cfg_deployment_type: "{{ deployment_type_selection | default('Serverless') }}"
     cfg_configuration: "{{ configuration | default('Python 3.11') }}"
     cfg_memory: "{{ memory | default('1 vCPU / 2 GB') }}"
@@ -15,43 +17,203 @@
     cfg_env_var: "{{ env_var | default('Prod') }}"
     cfg_timeout: "{{ timeout | default('10') }}"
 
+    # Ubuntu 26.04.1 ISO path in WSL (replace <YourWindowsUser> or pass iso_path in Semaphore)
+    cfg_iso_path: "{{ iso_path | default('/mnt/c/Users/' + (ansible_env.SUDO_USER | default(ansible_env.USER | default('user'))) + '/Downloads/ubuntu-26.04.1-live-server-amd64.iso') }}"
+    vm_name: "{{ kvm_vm_name | default('relfast-vm') }}"
+    vm_disk_size_gb: "{{ (kvm_disk_size_gb | default(20)) | int }}"
+    vm_disk_path: "{{ kvm_disk_path | default('/var/lib/libvirt/images/' + (kvm_vm_name | default('relfast-vm')) + '.qcow2') }}"
+    vm_os_variant: "{{ kvm_os_variant | default('ubuntu24.04') }}"
+    install_opentofu: "{{ install_opentofu | default(true) | bool }}"
+
+    # Parse vCPU and RAM (in MB) from cfg_memory (e.g., '1 vCPU / 2 GB' or '2 vCPU / 4 GB')
+    parsed_vcpus: >-
+      {{
+        ((cfg_memory | regex_search('([0-9]+)\s*vCPU', '\1'))[0] | default('2')) | int
+      }}
+    parsed_ram_mb: >-
+      {{
+        (((cfg_memory | regex_search('([0-9]+)\s*GB', '\1'))[0] | default('2')) | int) * 1024
+      }}
+
+    # Parse all valid numeric ports from cfg_allowed_port (e.g., '80,443' -> ['80', '443'])
+    raw_port_items: "{{ (cfg_allowed_port | string).split(',') | map('trim') | list }}"
+    parsed_ports: "{{ raw_port_items | select('match', '^[0-9]+$') | list }}"
+    primary_port: "{{ parsed_ports[0] | default('3000') }}"
+
+  pre_tasks:
+    - name: Display VM, port, and deployment configuration
+      ansible.builtin.debug:
+        msg:
+          - "VM Name: {{ vm_name }} | OS Variant: {{ vm_os_variant }} | Disk: {{ vm_disk_path }} ({{ vm_disk_size_gb }}G)"
+          - "Resources: {{ parsed_vcpus }} vCPU, {{ parsed_ram_mb }} MB RAM (from '{{ cfg_memory }}')"
+          - "Ports Input: {{ cfg_allowed_port }} | Valid Ports: {{ parsed_ports | join(', ') if parsed_ports | length > 0 else 'none (default 3000)' }} | Primary Port: {{ primary_port }}"
+          - "Deployment: {{ cfg_deployment_type }} | Config: {{ cfg_configuration }} | Network: {{ cfg_network_type }} | Env: {{ cfg_env_var }} | Timeout: {{ cfg_timeout }} mins"
+          - "VPC: {{ cfg_vpc_id if cfg_vpc_id != '' else 'None' }} | Security Group: {{ cfg_security_group_name if cfg_security_group_name != '' else 'None' }}"
+          - "ISO Path: {{ cfg_iso_path }}"
+
+    - name: Verify /dev/kvm device is present for KVM
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: kvm_dev_stat
+
+    - name: Fail clearly if /dev/kvm is missing
+      ansible.builtin.fail:
+        msg: >-
+          /dev/kvm was not found. Enable BIOS virtualization, set nestedVirtualization=true
+          in Windows .wslconfig, run 'wsl --shutdown', and reopen Ubuntu.
+      when: not kvm_dev_stat.stat.exists
+
+    - name: Verify ISO file exists at cfg_iso_path
+      ansible.builtin.stat:
+        path: "{{ cfg_iso_path }}"
+      register: iso_file_stat
+
+    - name: Fail clearly if ISO file is missing
+      ansible.builtin.fail:
+        msg: "ISO file not found at '{{ cfg_iso_path }}'. Check the filename in Downloads or pass iso_path in Semaphore."
+      when: not iso_file_stat.stat.exists
+
   tasks:
-    - name: Display deployment configuration parameters
-      debug:
-        msg: >
-          Running setup for Deployment: {{ cfg_deployment_type }} |
-          Runtime/Config: {{ cfg_configuration }} |
-          Memory: {{ cfg_memory }} |
-          Network: {{ cfg_network_type }} |
-          VPC ID: {{ cfg_vpc_id if cfg_vpc_id != '' else 'None (Public/Local)' }} |
-          Security Group: {{ cfg_security_group_name if cfg_security_group_name != '' else 'None' }} |
-          Ports: {{ cfg_allowed_port }} |
-          Environment: {{ cfg_env_var }} |
-          Timeout: {{ cfg_timeout }} mins
-
-    - name: Update apt package cache (Debian/Ubuntu containers)
-      apt:
-        update_cache: yes
+    - name: Gather installed packages before conditional installation
+      ansible.builtin.package_facts:
+        manager: auto
       when: ansible_os_family == "Debian"
-      ignore_errors: yes
 
-    - name: Install required terminal and development packages
-      apt:
+    - name: Refresh apt cache on Ubuntu/Debian
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Install KVM, libvirt, and base utilities
+      ansible.builtin.apt:
         name:
+          - qemu-kvm
+          - libvirt-daemon-system
+          - libvirt-clients
+          - virtinst
+          - bridge-utils
+          - cpu-checker
           - curl
           - git
           - htop
           - bash-completion
+          - unzip
+          - ca-certificates
+          - openssl
+          - python3
+          - python3-pip
         state: present
       when: ansible_os_family == "Debian"
-      ignore_errors: yes
 
-    - name: Create local workspace directory for application files
-      file:
-        path: "{{ ansible_env.HOME }}/relfast/workspace"
+    - name: Install Python venv package when configuration targets Python and git is installed
+      ansible.builtin.apt:
+        name:
+          - python3-venv
+        state: present
+      when:
+        - ansible_os_family == "Debian"
+        - "'python' in (cfg_configuration | lower)"
+        - "'git' in (ansible_facts.packages | default({}))"
+
+    - name: Ensure libvirtd service is started
+      ansible.builtin.service:
+        name: libvirtd
+        state: started
+        enabled: true
+      failed_when: false
+
+    - name: Ensure libvirt default network is active
+      ansible.builtin.shell: |
+        set -eu
+        virsh net-define /usr/share/libvirt/networks/default.xml 2>/dev/null || true
+        virsh net-start default 2>/dev/null || true
+        virsh net-autostart default 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: Create local workspace directory
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME | default('/root') }}/relfast/workspace"
         state: directory
-        mode: '0755'
+        mode: "0755"
 
-    - name: Finalize environment verification status
-      debug:
-        msg: "VM environment setup completed successfully. Live terminal is active and ready."
+    - name: Write VM and port configuration manifest for reference
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME | default('/root') }}/relfast/workspace/{{ vm_name }}-config.json"
+        mode: "0644"
+        content: |
+          {
+            "vm_name": "{{ vm_name }}",
+            "iso_path": "{{ cfg_iso_path }}",
+            "disk_path": "{{ vm_disk_path }}",
+            "disk_size_gb": {{ vm_disk_size_gb }},
+            "vcpus": {{ parsed_vcpus }},
+            "ram_mb": {{ parsed_ram_mb }},
+            "allowed_ports": {{ parsed_ports | to_json }},
+            "primary_port": "{{ primary_port }}",
+            "deployment_type": "{{ cfg_deployment_type }}",
+            "configuration": "{{ cfg_configuration }}",
+            "network_type": "{{ cfg_network_type }}",
+            "vpc_id": "{{ cfg_vpc_id }}",
+            "security_group_name": "{{ cfg_security_group_name }}",
+            "env_var": "{{ cfg_env_var }}",
+            "timeout_mins": "{{ cfg_timeout }}"
+          }
+
+    - name: Create qcow2 disk image for the KVM VM
+      ansible.builtin.command:
+        argv:
+          - qemu-img
+          - create
+          - -f
+          - qcow2
+          - "{{ vm_disk_path }}"
+          - "{{ vm_disk_size_gb }}G"
+      args:
+        creates: "{{ vm_disk_path }}"
+
+    - name: Check if KVM VM already exists in libvirt
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - dominfo
+          - "{{ vm_name }}"
+      register: vm_exists_check
+      changed_when: false
+      failed_when: false
+
+    - name: Provision KVM VM from ISO if not already defined
+      ansible.builtin.command:
+        argv:
+          - virt-install
+          - --name={{ vm_name }}
+          - --memory={{ parsed_ram_mb }}
+          - --vcpus={{ parsed_vcpus }}
+          - --disk=path={{ vm_disk_path }},format=qcow2
+          - --cdrom={{ cfg_iso_path }}
+          - --os-variant={{ vm_os_variant }}
+          - --network=network=default
+          - --graphics=none
+          - --noautoconsole
+      when: vm_exists_check.rc != 0
+
+    - name: Install OpenTofu when requested
+      ansible.builtin.shell: |
+        set -eu
+        curl -fsSL https://get.opentofu.org/install-opentofu.sh -o /tmp/install-opentofu.sh
+        chmod 0755 /tmp/install-opentofu.sh
+        /tmp/install-opentofu.sh --install-method deb
+      args:
+        creates: /usr/bin/tofu
+      when:
+        - install_opentofu
+        - ansible_os_family == "Debian"
+
+    - name: Finalize KVM setup and port summary
+      ansible.builtin.debug:
+        msg:
+          - "KVM VM setup finished for '{{ vm_name }}' using ISO '{{ cfg_iso_path }}'."
+          - "VM Specs: {{ parsed_vcpus }} vCPU, {{ parsed_ram_mb }} MB RAM, {{ vm_disk_size_gb }}G disk at {{ vm_disk_path }}."
+          - "Configured Ports: {{ parsed_ports | join(', ') if parsed_ports | length > 0 else '3000 (default)' }} (Primary: {{ primary_port }})."
+          - "Config manifest written to ~/relfast/workspace/{{ vm_name }}-config.json."
