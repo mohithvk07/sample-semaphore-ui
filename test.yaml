@@ -18,8 +18,7 @@
     cfg_timeout: "{{ timeout | default('10') }}"
 
     # Ubuntu 26.04.1 ISO path in WSL (pass iso_path in Semaphore if Windows folder name differs)
-    cfg_iso_path: "{{ iso_path | default('/mnt/c/Users/' + (ansible_facts['env']['SUDO_USER'] | default(ansible_facts['env']['USER'] | default('user'))) + '/Downloads/ubuntu-26.04.1-live-server-amd64.iso') }}"
-    vm_name: "{{ kvm_vm_name | default('relfast-vm') }}"
+    cfg_iso_path: "{{ iso_path | default('/mnt/c/Users/Admin/Downloads/ubuntu-26.04.1-live-server-amd64.iso') }}"vm_name: "{{ kvm_vm_name | default('relfast-vm') }}"
     vm_disk_size_gb: "{{ (kvm_disk_size_gb | default(20)) | int }}"
     vm_disk_path: "{{ kvm_disk_path | default('/var/lib/libvirt/images/' + (kvm_vm_name | default('relfast-vm')) + '.qcow2') }}"
     vm_os_variant: "{{ kvm_os_variant | default('ubuntu24.04') }}"
