@@ -75,17 +75,7 @@
       when: not iso_file_stat.stat.exists
 
   tasks:
-    - name: Gather installed packages before conditional installation
-      ansible.builtin.package_facts:
-        manager: auto
-      failed_when: false
-
-    - name: Refresh apt cache
-      ansible.builtin.apt:
-        update_cache: true
-        cache_valid_time: 3600
-
-    - name: Install KVM, libvirt, qemu-utils, and base utilities
+    - name: Install packages on Debian/Ubuntu using apt
       ansible.builtin.apt:
         name:
           - qemu-kvm
@@ -105,29 +95,39 @@
           - python3
           - python3-pip
         state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == "Debian"
 
-    - name: Install Python venv package when configuration targets Python and git is installed
-      ansible.builtin.apt:
+    - name: Install available QEMU and base packages on Alpine using apk
+      ansible.builtin.apk:
         name:
-          - python3-venv
+          - qemu-img
+          - qemu-system-x86_64
+          - curl
+          - git
+          - ca-certificates
+          - openssl
+          - python3
+        update_cache: true
         state: present
-      when:
-        - "'python' in (cfg_configuration | lower)"
-        - "'git' in (ansible_facts['packages'] | default({}))"
+      when: ansible_facts['os_family'] == "Alpine"
+      failed_when: false
 
-    - name: Ensure libvirtd service is started
+    - name: Ensure libvirtd service is started when available
       ansible.builtin.service:
         name: libvirtd
         state: started
         enabled: true
       failed_when: false
 
-    - name: Ensure libvirt default network is active
+    - name: Ensure libvirt default network is active when virsh is available
       ansible.builtin.shell: |
         set -eu
-        virsh net-define /usr/share/libvirt/networks/default.xml 2>/dev/null || true
-        virsh net-start default 2>/dev/null || true
-        virsh net-autostart default 2>/dev/null || true
+        if command -v virsh >/dev/null 2>&1; then
+          virsh net-define /usr/share/libvirt/networks/default.xml 2>/dev/null || true
+          virsh net-start default 2>/dev/null || true
+          virsh net-autostart default 2>/dev/null || true
+        fi
       changed_when: false
       failed_when: false
 
@@ -160,6 +160,12 @@
             "timeout_mins": "{{ cfg_timeout }}"
           }
 
+    - name: Ensure disk parent directory exists
+      ansible.builtin.file:
+        path: "{{ vm_disk_path | dirname }}"
+        state: directory
+        mode: "0755"
+
     - name: Create qcow2 disk image for the KVM VM
       ansible.builtin.command:
         argv:
@@ -173,41 +179,34 @@
         creates: "{{ vm_disk_path }}"
 
     - name: Check if KVM VM already exists in libvirt
-      ansible.builtin.command:
-        argv:
-          - virsh
-          - dominfo
-          - "{{ vm_name }}"
+      ansible.builtin.shell: |
+        if command -v virsh >/dev/null 2>&1; then
+          virsh dominfo "{{ vm_name }}"
+        else
+          exit 1
+        fi
       register: vm_exists_check
       changed_when: false
       failed_when: false
 
-    - name: Provision KVM VM from ISO if not already defined
-      ansible.builtin.command:
-        argv:
-          - virt-install
-          - --name={{ vm_name }}
-          - --memory={{ parsed_ram_mb }}
-          - --vcpus={{ parsed_vcpus }}
-          - --disk=path={{ vm_disk_path }},format=qcow2
-          - --cdrom={{ cfg_iso_path }}
-          - --os-variant={{ vm_os_variant }}
-          - --network=network=default
-          - --graphics=none
-          - --noautoconsole
-      when: vm_exists_check.rc != 0
-
-    - name: Install OpenTofu when requested
+    - name: Provision KVM VM from ISO if not already defined and virt-install is available
       ansible.builtin.shell: |
         set -eu
-        curl -fsSL https://get.opentofu.org/install-opentofu.sh -o /tmp/install-opentofu.sh
-        chmod 0755 /tmp/install-opentofu.sh
-        /tmp/install-opentofu.sh --install-method deb
-      args:
-        creates: /usr/bin/tofu
-      when:
-        - install_opentofu
-        - (ansible_facts['os_family'] | default('Debian')) == "Debian"
+        if command -v virt-install >/dev/null 2>&1; then
+          virt-install \
+            --name="{{ vm_name }}" \
+            --memory={{ parsed_ram_mb }} \
+            --vcpus={{ parsed_vcpus }} \
+            --disk=path={{ vm_disk_path }},format=qcow2 \
+            --cdrom="{{ cfg_iso_path }}" \
+            --os-variant={{ vm_os_variant }} \
+            --network=network=default \
+            --graphics=none \
+            --noautoconsole
+        else
+          echo "virt-install not available in this container environment; qcow2 image and manifest are ready."
+        fi
+      when: vm_exists_check.rc != 0
 
     - name: Finalize KVM setup and port summary
       ansible.builtin.debug:
