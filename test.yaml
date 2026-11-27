@@ -3,7 +3,7 @@
   hosts: localhost
   connection: local
   gather_facts: true
-  become: "{{ (ansible_user_id | default('root')) != 'root' }}"
+  become: false
 
   vars:
     # Incoming Semaphore form variables with safe defaults
@@ -17,8 +17,8 @@
     cfg_env_var: "{{ env_var | default('Prod') }}"
     cfg_timeout: "{{ timeout | default('10') }}"
 
-    # Ubuntu 26.04.1 ISO path in WSL (replace <YourWindowsUser> or pass iso_path in Semaphore)
-    cfg_iso_path: "{{ iso_path | default('/mnt/c/Users/' + (ansible_env.SUDO_USER | default(ansible_env.USER | default('user'))) + '/Downloads/ubuntu-26.04.1-live-server-amd64.iso') }}"
+    # Ubuntu 26.04.1 ISO path in WSL (pass iso_path in Semaphore if Windows folder name differs)
+    cfg_iso_path: "{{ iso_path | default('/mnt/c/Users/' + (ansible_facts['env']['SUDO_USER'] | default(ansible_facts['env']['USER'] | default('user'))) + '/Downloads/ubuntu-26.04.1-live-server-amd64.iso') }}"
     vm_name: "{{ kvm_vm_name | default('relfast-vm') }}"
     vm_disk_size_gb: "{{ (kvm_disk_size_gb | default(20)) | int }}"
     vm_disk_path: "{{ kvm_disk_path | default('/var/lib/libvirt/images/' + (kvm_vm_name | default('relfast-vm')) + '.qcow2') }}"
@@ -39,6 +39,7 @@
     raw_port_items: "{{ (cfg_allowed_port | string).split(',') | map('trim') | list }}"
     parsed_ports: "{{ raw_port_items | select('match', '^[0-9]+$') | list }}"
     primary_port: "{{ parsed_ports[0] | default('3000') }}"
+    workspace_dir: "{{ (ansible_facts['env']['HOME'] | default('/root')) + '/relfast/workspace' }}"
 
   pre_tasks:
     - name: Display VM, port, and deployment configuration
@@ -77,13 +78,13 @@
     - name: Gather installed packages before conditional installation
       ansible.builtin.package_facts:
         manager: auto
-      when: ansible_os_family == "Debian"
+      when: ansible_facts['os_family'] == "Debian"
 
     - name: Refresh apt cache on Ubuntu/Debian
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
-      when: ansible_os_family == "Debian"
+      when: ansible_facts['os_family'] == "Debian"
 
     - name: Install KVM, libvirt, and base utilities
       ansible.builtin.apt:
@@ -104,7 +105,7 @@
           - python3
           - python3-pip
         state: present
-      when: ansible_os_family == "Debian"
+      when: ansible_facts['os_family'] == "Debian"
 
     - name: Install Python venv package when configuration targets Python and git is installed
       ansible.builtin.apt:
@@ -112,9 +113,9 @@
           - python3-venv
         state: present
       when:
-        - ansible_os_family == "Debian"
+        - ansible_facts['os_family'] == "Debian"
         - "'python' in (cfg_configuration | lower)"
-        - "'git' in (ansible_facts.packages | default({}))"
+        - "'git' in (ansible_facts['packages'] | default({}))"
 
     - name: Ensure libvirtd service is started
       ansible.builtin.service:
@@ -134,13 +135,13 @@
 
     - name: Create local workspace directory
       ansible.builtin.file:
-        path: "{{ ansible_env.HOME | default('/root') }}/relfast/workspace"
+        path: "{{ workspace_dir }}"
         state: directory
         mode: "0755"
 
     - name: Write VM and port configuration manifest for reference
       ansible.builtin.copy:
-        dest: "{{ ansible_env.HOME | default('/root') }}/relfast/workspace/{{ vm_name }}-config.json"
+        dest: "{{ workspace_dir }}/{{ vm_name }}-config.json"
         mode: "0644"
         content: |
           {
@@ -208,7 +209,7 @@
         creates: /usr/bin/tofu
       when:
         - install_opentofu
-        - ansible_os_family == "Debian"
+        - ansible_facts['os_family'] == "Debian"
 
     - name: Finalize KVM setup and port summary
       ansible.builtin.debug:
@@ -216,4 +217,4 @@
           - "KVM VM setup finished for '{{ vm_name }}' using ISO '{{ cfg_iso_path }}'."
           - "VM Specs: {{ parsed_vcpus }} vCPU, {{ parsed_ram_mb }} MB RAM, {{ vm_disk_size_gb }}G disk at {{ vm_disk_path }}."
           - "Configured Ports: {{ parsed_ports | join(', ') if parsed_ports | length > 0 else '3000 (default)' }} (Primary: {{ primary_port }})."
-          - "Config manifest written to ~/relfast/workspace/{{ vm_name }}-config.json."
+          - "Config manifest written to {{ workspace_dir }}/{{ vm_name }}-config.json."
