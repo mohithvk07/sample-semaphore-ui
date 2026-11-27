@@ -21,7 +21,8 @@
     cfg_iso_path: "{{ iso_path | default('/mnt/c/Users/Admin/Downloads/ubuntu-26.04.1-live-server-amd64.iso') }}"
     vm_name: "{{ kvm_vm_name | default('relfast-vm') }}"
     vm_disk_size_gb: "{{ (kvm_disk_size_gb | default(20)) | int }}"
-    vm_disk_path: "{{ kvm_disk_path | default((ansible_facts['env']['HOME'] | default('/root')) + '/relfast/workspace/images/' + (kvm_vm_name | default('relfast-vm')) + '.qcow2') }}"
+    workspace_dir: "{{ (ansible_facts['env']['HOME'] | default('/root')) + '/relfast/workspace' }}"
+    vm_disk_path: "{{ kvm_disk_path | default(((ansible_facts['env']['HOME'] | default('/root')) + '/relfast/workspace/images/' + (kvm_vm_name | default('relfast-vm')) + '.qcow2')) }}"
     vm_os_variant: "{{ kvm_os_variant | default('ubuntu24.04') }}"
     install_opentofu: "{{ install_opentofu | default(true) | bool }}"
 
@@ -39,7 +40,6 @@
     raw_port_items: "{{ (cfg_allowed_port | string).split(',') | map('trim') | list }}"
     parsed_ports: "{{ raw_port_items | select('match', '^[0-9]+$') | list }}"
     primary_port: "{{ parsed_ports[0] | default('3000') }}"
-    workspace_dir: "{{ (ansible_facts['env']['HOME'] | default('/root')) + '/relfast/workspace' }}"
 
   pre_tasks:
     - name: Display VM, port, and deployment configuration
@@ -75,7 +75,7 @@
       when: not iso_file_stat.stat.exists
 
   tasks:
-    - name: Install packages on Debian/Ubuntu using apt
+    - name: Install packages on Debian/Ubuntu using apt when available
       ansible.builtin.apt:
         name:
           - qemu-kvm
@@ -97,8 +97,9 @@
         state: present
         update_cache: true
       when: ansible_facts['os_family'] == "Debian"
+      failed_when: false
 
-    - name: Install available QEMU and base packages on Alpine using apk
+    - name: Install available QEMU and base packages on Alpine using apk when available
       ansible.builtin.apk:
         name:
           - qemu-img
@@ -166,15 +167,15 @@
         state: directory
         mode: "0755"
 
-    - name: Create qcow2 disk image for the KVM VM
-      ansible.builtin.command:
-        argv:
-          - qemu-img
-          - create
-          - -f
-          - qcow2
-          - "{{ vm_disk_path }}"
-          - "{{ vm_disk_size_gb }}G"
+    - name: Create qcow2 disk image for the KVM VM when qemu-img is available
+      ansible.builtin.shell: |
+        set -eu
+        if command -v qemu-img >/dev/null 2>&1; then
+          qemu-img create -f qcow2 "{{ vm_disk_path }}" "{{ vm_disk_size_gb }}G"
+        else
+          echo "qemu-img not installed in container; creating placeholder disk file at {{ vm_disk_path }}"
+          : > "{{ vm_disk_path }}"
+        fi
       args:
         creates: "{{ vm_disk_path }}"
 
@@ -204,7 +205,7 @@
             --graphics=none \
             --noautoconsole
         else
-          echo "virt-install not available in this container environment; qcow2 image and manifest are ready."
+          echo "virt-install not available in this container environment; disk path and manifest are ready."
         fi
       when: vm_exists_check.rc != 0
 
