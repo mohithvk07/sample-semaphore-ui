@@ -78,18 +78,18 @@
     - name: Gather installed packages before conditional installation
       ansible.builtin.package_facts:
         manager: auto
-      when: ansible_facts['os_family'] == "Debian"
+      failed_when: false
 
-    - name: Refresh apt cache on Ubuntu/Debian
+    - name: Refresh apt cache
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
-      when: ansible_facts['os_family'] == "Debian"
 
-    - name: Install KVM, libvirt, and base utilities
+    - name: Install KVM, libvirt, qemu-utils, and base utilities
       ansible.builtin.apt:
         name:
           - qemu-kvm
+          - qemu-utils
           - libvirt-daemon-system
           - libvirt-clients
           - virtinst
@@ -105,7 +105,6 @@
           - python3
           - python3-pip
         state: present
-      when: ansible_facts['os_family'] == "Debian"
 
     - name: Install Python venv package when configuration targets Python and git is installed
       ansible.builtin.apt:
@@ -113,7 +112,6 @@
           - python3-venv
         state: present
       when:
-        - ansible_facts['os_family'] == "Debian"
         - "'python' in (cfg_configuration | lower)"
         - "'git' in (ansible_facts['packages'] | default({}))"
 
@@ -209,7 +207,7 @@
         creates: /usr/bin/tofu
       when:
         - install_opentofu
-        - ansible_facts['os_family'] == "Debian"
+        - (ansible_facts['os_family'] | default('Debian')) == "Debian"
 
     - name: Finalize KVM setup and port summary
       ansible.builtin.debug:
